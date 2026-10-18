@@ -103,7 +103,14 @@ async def download_baddiehub(url, dest):
 
         logger.info(f"Found {len(all_media)} media URLs")
         for media_url in all_media:
-            cmd_args = ["cyberdrop-dl", "--download", "--ui", "DISABLED", "-d", str(dest), media_url]
+            cmd_args = [
+                "cyberdrop-dl",
+                "--ui", "DISABLED",
+                "--download",
+                "--ignore-history",
+                "-d", str(dest),
+                media_url,
+            ]
             proc = await runtime.spawn_exec(
                 *cmd_args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )

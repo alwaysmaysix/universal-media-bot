@@ -238,6 +238,7 @@ async def process_urls(client, message, chat_id, urls, status_msg=None, dest=Non
             baddiehub_titles=baddiehub_titles,
             as_document=as_document,
             prefs=prefs,
+            user_name=user_name,
         )
     except asyncio.CancelledError:
         raise

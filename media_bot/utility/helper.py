@@ -299,6 +299,61 @@ def build_custom_progress_display(
     return display.strip()
 
 
+def build_upload_progress_display(
+    filename, progress_data, user_name="User", file_index=None, total_files=None
+) -> str:
+    """The same ⬢⬡ layout used for downloads, applied to uploads."""
+    task_name = str(filename)[:50]
+    if file_index and total_files:
+        task_name = f"[{file_index}/{total_files}] {task_name}"
+
+    percentage = progress_data.get("percentage") or 0
+    bar = generate_progress_bar(percentage)
+    elapsed_str = format_time_hms(progress_data.get("elapsed", 0))
+
+    return (
+        f"#Task: ⬆️ {task_name}\n"
+        f"➜ {bar} » {percentage:.1f} %\n"
+        "➜ Status : Upload 📤\n"
+        f"➜ Done   : {naturalsize(progress_data.get('downloaded_bytes', 0))}"
+        f" of {progress_data.get('total_size_str', 'Unknown')}\n"
+        f"➜ Speed  : {progress_data.get('speed', 'N/A')}\n"
+        f"➜ ETA    : {progress_data.get('eta', 'N/A')}\n"
+        f"➜ Past   : {elapsed_str}\n"
+        f"➜ User   : {user_name}"
+    ).strip()
+
+
+_PROGRESS_TICKS: dict = {}
+
+
+def _progress_key(status_msg):
+    """Stable per-status-message key (chat id + message id when available)."""
+    chat = getattr(status_msg, "chat", None)
+    chat_id = getattr(chat, "id", None)
+    mid = getattr(status_msg, "id", None)
+    if chat_id is None and mid is None:
+        return id(status_msg)
+    return (chat_id, mid)
+
+
+def progress_due(status_msg, interval: float = 2.0) -> bool:
+    """True when this status message may be edited again.
+
+    The throttle is keyed per status message, so several users (or several
+    concurrent downloads) no longer starve each other's updates the way a
+    single global timestamp did.
+    """
+    if not status_msg:
+        return False
+    key = _progress_key(status_msg)
+    now = time.time()
+    if now - _PROGRESS_TICKS.get(key, 0) < interval:
+        return False
+    _PROGRESS_TICKS[key] = now
+    return True
+
+
 async def update_progress(
     status_msg,
     url,
@@ -311,27 +366,34 @@ async def update_progress(
     speed_str="N/A",
     eta_str="N/A",
     dl_type="unknown",
+    percentage=None,
+    total_size_str=None,
 ):
-    """Standardised progress reporting for the specialised downloaders."""
+    """Standardised progress reporting for the specialised downloaders.
+
+    `percentage` / `total_size_str` can be supplied directly for engines whose
+    progress is not a simple byte ratio (e.g. m3u8 segment counts).
+    """
     if not status_msg:
         return
-    percentage = downloaded_bytes / total_bytes * 100 if total_bytes > 0 else 0
+    if not progress_due(status_msg, 2.0):
+        return
+
+    if percentage is None:
+        percentage = downloaded_bytes / total_bytes * 100 if total_bytes > 0 else 0
     progress_data = {
         "type": dl_type,
         "percentage": percentage,
         "downloaded_bytes": downloaded_bytes,
-        "total_size_str": naturalsize(total_bytes),
+        "total_size_str": (
+            total_size_str if total_size_str is not None else naturalsize(total_bytes)
+        ),
         "speed": speed_str,
         "eta": eta_str,
     }
     display = build_custom_progress_display(
         url, progress_data, file_index, total_files, user_name, start_time
     )
-
-    now = time.time()
-    if now - getattr(update_progress, "last_update", 0) < 2:
-        return
-    update_progress.last_update = now
 
     # Imported lazily to avoid a hard dependency loop at import time.
     from pyrogram.errors import FloodWait, MessageNotModified

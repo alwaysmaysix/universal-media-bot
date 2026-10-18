@@ -11,7 +11,13 @@ from humanize import naturalsize
 from pyrogram.errors import FloodWait, MessageNotModified
 from pyrogram.types import InputMediaPhoto
 
-from media_bot.utility.helper import baddiehub_caption, format_caption, generate_thumbnail
+from media_bot.utility.helper import (
+    baddiehub_caption,
+    build_upload_progress_display,
+    format_caption,
+    generate_thumbnail,
+    progress_due,
+)
 from media_bot.utility.variables import Config
 
 logger = logging.getLogger(__name__)
@@ -20,27 +26,27 @@ IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
 VIDEO_EXTS = [".mp4", ".mkv", ".webm", ".avi", ".mov"]
 
 
-async def progress_cb(current, total, msg, start_time, filename):
-    """Upload progress callback for Pyrogram."""
+async def progress_cb(current, total, msg, start_time, filename, user_name="User"):
+    """Upload progress callback for Pyrogram (same layout as downloads)."""
     if not msg:
         return
-    now = time.time()
-    if now - getattr(progress_cb, "last_update", 0) < 3:
+    if not progress_due(msg, 3.0):
         return
-    progress_cb.last_update = now
 
-    percent = current * 100 / total
+    now = time.time()
     elapsed = now - start_time
     speed = current / elapsed if elapsed > 0 else 0
     eta = (total - current) / speed if speed > 0 else 0
 
-    bar_len = 20
-    filled = int(bar_len * current / total)
-    bar = "█" * filled + "░" * (bar_len - filled)
-
-    text = f"**📤 {filename[:35]}**\n\n`{bar}` {percent:.1f}%\n\n"
-    text += f"✅ {naturalsize(current)} / {naturalsize(total)}\n"
-    text += f"⚡ {naturalsize(speed)}/s | ⏳ {time.strftime('%M:%S', time.gmtime(eta))}"
+    progress_data = {
+        "percentage": (current * 100 / total) if total else 0,
+        "downloaded_bytes": current,
+        "total_size_str": naturalsize(total),
+        "speed": f"{naturalsize(speed)}/s",
+        "eta": time.strftime("%M:%S", time.gmtime(eta)),
+        "elapsed": elapsed,
+    }
+    text = build_upload_progress_display(filename, progress_data, user_name)
 
     try:
         await msg.edit_text(text)
@@ -59,6 +65,7 @@ async def upload_to_telegram(
     progress_chat_id=None,
     as_document=False,
     thumb_override=None,
+    user_name="User",
 ):
     """Upload a single file, choosing video / photo / document based on the suffix.
 
@@ -109,19 +116,19 @@ async def upload_to_telegram(
                         file_chat_id, file_path, caption=cap, thumb=thumb,
                         duration=duration or None, width=width or None, height=height or None,
                         supports_streaming=True, progress=progress_cb,
-                        progress_args=(progress_msg, time.time(), filename),
+                        progress_args=(progress_msg, time.time(), filename, user_name),
                     )
                     if gen_thumb and gen_thumb != thumb and Path(gen_thumb).exists():
                         Path(gen_thumb).unlink()
                 elif not as_document and ext in IMAGE_EXTS:
                     await client.send_photo(
                         file_chat_id, file_path, caption=cap, progress=progress_cb,
-                        progress_args=(progress_msg, time.time(), filename),
+                        progress_args=(progress_msg, time.time(), filename, user_name),
                     )
                 else:
                     await client.send_document(
                         file_chat_id, file_path, caption=cap, progress=progress_cb,
-                        progress_args=(progress_msg, time.time(), filename),
+                        progress_args=(progress_msg, time.time(), filename, user_name),
                     )
                 break
             except FloodWait as exc:
@@ -170,6 +177,7 @@ async def upload_file_with_album(
     baddiehub_titles=None,
     as_document=False,
     prefs=None,
+    user_name="User",
 ):
     """Upload a batch of files, grouping consecutive images into media albums.
 
@@ -241,7 +249,7 @@ async def upload_file_with_album(
             if await upload_to_telegram(
                 client, file_chat_id, str(img), image_caption(img, idx),
                 progress_chat_id=progress_chat_id, as_document=as_document,
-                thumb_override=thumb_override,
+                thumb_override=thumb_override, user_name=user_name,
             ):
                 uploaded += 1
             await asyncio.sleep(Config.DELAY_BETWEEN_FILES)
@@ -250,7 +258,7 @@ async def upload_file_with_album(
         if await upload_to_telegram(
             client, file_chat_id, str(video), file_caption(video, idx),
             progress_chat_id=progress_chat_id, as_document=as_document,
-            thumb_override=thumb_override,
+            thumb_override=thumb_override, user_name=user_name,
         ):
             uploaded += 1
         await asyncio.sleep(Config.DELAY_BETWEEN_FILES)
@@ -259,7 +267,7 @@ async def upload_file_with_album(
         if await upload_to_telegram(
             client, file_chat_id, str(other), file_caption(other, idx),
             progress_chat_id=progress_chat_id, as_document=as_document,
-            thumb_override=thumb_override,
+            thumb_override=thumb_override, user_name=user_name,
         ):
             uploaded += 1
         await asyncio.sleep(Config.DELAY_BETWEEN_FILES)

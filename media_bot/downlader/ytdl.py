@@ -22,20 +22,22 @@ from media_bot.utility.variables import Config, Paths
 
 logger = logging.getLogger(__name__)
 
-_YTDL_STATE: dict = {}
-_YTDL_THREAD: threading.Thread | None = None
-
 
 class _YTDLLogger:
+    """Routes yt-dlp's log lines into one download's own state dict."""
+
+    def __init__(self, state):
+        self._state = state
+
     def debug(self, msg):
         if "[ExtractAudio]" in str(msg) or "[ffmpeg]" in str(msg):
-            _YTDL_STATE["status"] = "merging"
-            _YTDL_STATE["speed"] = "Merging..."
-            _YTDL_STATE["eta"] = "..."
+            self._state["status"] = "merging"
+            self._state["speed"] = "Merging..."
+            self._state["eta"] = "..."
         elif "item" in str(msg):
-            _YTDL_STATE["status"] = "playlist"
-            _YTDL_STATE["speed"] = "Playlist..."
-            _YTDL_STATE["eta"] = "..."
+            self._state["status"] = "playlist"
+            self._state["speed"] = "Playlist..."
+            self._state["eta"] = "..."
 
     @staticmethod
     def warning(msg):
@@ -47,43 +49,48 @@ class _YTDLLogger:
             logger.error(f"[yt-dlp] {msg}")
 
 
-def _ytdl_progress_hook(d):
-    """Synchronous progress hook called by yt-dlp inside the worker thread."""
-    if d["status"] == "downloading":
-        total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
-        downloaded_bytes = d.get("downloaded_bytes", 0)
-        _YTDL_STATE["status"] = "downloading"
-        _YTDL_STATE["total_bytes"] = total_bytes
-        _YTDL_STATE["downloaded_bytes"] = downloaded_bytes
-        _YTDL_STATE["percentage"] = (
-            downloaded_bytes / total_bytes * 100 if total_bytes > 0 else 0
-        )
-        speed = d.get("speed")
-        _YTDL_STATE["speed"] = f"{naturalsize(speed)}/s" if speed else "N/A"
-        eta = d.get("eta")
-        _YTDL_STATE["eta"] = format_time_hms(eta) if eta else "N/A"
-    elif d["status"] == "finished":
-        _YTDL_STATE["status"] = "merging"
-        _YTDL_STATE["percentage"] = 100
-        _YTDL_STATE["total_bytes"] = d.get("total_bytes", d.get("downloaded_bytes", 0))
-    elif d["status"] == "error":
-        _YTDL_STATE["status"] = "error"
-        _YTDL_STATE["error"] = d.get("message", "Unknown YTDL error")
+def _make_progress_hook(state):
+    """Synchronous progress hook, bound to one download's state.
+
+    yt-dlp calls this from inside the worker thread. Binding the state here
+    (instead of a module-level dict) keeps concurrent downloads isolated.
+    """
+
+    def _hook(d):
+        if d["status"] == "downloading":
+            total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+            downloaded_bytes = d.get("downloaded_bytes", 0)
+            state["status"] = "downloading"
+            state["total_bytes"] = total_bytes
+            state["downloaded_bytes"] = downloaded_bytes
+            state["percentage"] = (
+                downloaded_bytes / total_bytes * 100 if total_bytes > 0 else 0
+            )
+            speed = d.get("speed")
+            state["speed"] = f"{naturalsize(speed)}/s" if speed else "N/A"
+            eta = d.get("eta")
+            state["eta"] = format_time_hms(eta) if eta else "N/A"
+        elif d["status"] == "finished":
+            state["status"] = "merging"
+            state["percentage"] = 100
+            state["total_bytes"] = d.get("total_bytes") or state.get("downloaded_bytes", 0)
+
+    return _hook
 
 
-def _ytdl_downloader_thread(url, ydl_opts):
+def _ytdl_downloader_thread(url, ydl_opts, state):
     """The synchronous worker executed in the background thread."""
     import yt_dlp
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-        if _YTDL_STATE.get("status") != "error":
-            _YTDL_STATE["status"] = "finished"
+        if state.get("status") != "error":
+            state["status"] = "finished"
     except Exception as exc:  # noqa: BLE001
         logger.error(f"YTDL Thread Exception: {exc}")
-        _YTDL_STATE["status"] = "error"
-        _YTDL_STATE["error"] = str(exc)
+        state["status"] = "error"
+        state["error"] = str(exc)
 
 
 def _write_cookie_file_if_needed(url, cookies):
@@ -111,20 +118,22 @@ async def download_ytdl(
     """Download from a yt-dlp supported site using a worker thread."""
     from pyrogram.errors import FloodWait, MessageNotModified
 
-    global _YTDL_THREAD
-
-    _YTDL_STATE.clear()
-    _YTDL_STATE.update(
-        {"status": "starting", "percentage": 0, "downloaded_bytes": 0,
-         "total_bytes": 0, "speed": "N/A", "eta": "N/A"}
-    )
+    # Per-download state: two concurrent yt-dlp jobs never share it.
+    state = {
+        "status": "starting",
+        "percentage": 0,
+        "downloaded_bytes": 0,
+        "total_bytes": 0,
+        "speed": "N/A",
+        "eta": "N/A",
+    }
 
     fmt, merge_ext, audio_ext = FORMAT_PRESETS.get(ytdl_format, FORMAT_PRESETS["best"])
 
     ydl_opts = {
         "outtmpl": str(dest / "%(title)s [%(id)s].%(ext)s"),
-        "progress_hooks": [_ytdl_progress_hook],
-        "logger": _YTDLLogger(),
+        "progress_hooks": [_make_progress_hook(state)],
+        "logger": _YTDLLogger(state),
         "writethumbnail": True,
         "concurrent_fragment_downloads": 4,
         "overwrites": True,
@@ -154,22 +163,20 @@ async def download_ytdl(
     if before_date:
         ydl_opts["datebefore"] = before_date
 
-    _write_cookie_file_if_needed(url, Config.TWITTER_COOKIES)
-
-    _YTDL_THREAD = threading.Thread(
-        target=_ytdl_downloader_thread, args=(url, ydl_opts), daemon=True
+    thread = threading.Thread(
+        target=_ytdl_downloader_thread, args=(url, ydl_opts, state), daemon=True
     )
-    _YTDL_THREAD.start()
+    thread.start()
 
-    while _YTDL_THREAD.is_alive():
+    while thread.is_alive():
         await asyncio.sleep(2)
         progress_data = {
             "type": "ytdl",
-            "percentage": _YTDL_STATE.get("percentage", 0),
-            "downloaded_bytes": _YTDL_STATE.get("downloaded_bytes", 0),
-            "total_size_str": naturalsize(_YTDL_STATE.get("total_bytes", 0)),
-            "speed": _YTDL_STATE.get("speed", "N/A"),
-            "eta": _YTDL_STATE.get("eta", "N/A"),
+            "percentage": state.get("percentage", 0),
+            "downloaded_bytes": state.get("downloaded_bytes", 0),
+            "total_size_str": naturalsize(state.get("total_bytes", 0)),
+            "speed": state.get("speed", "N/A"),
+            "eta": state.get("eta", "N/A"),
         }
         display = build_custom_progress_display(
             url, progress_data, file_index, total_files, user_name, start_time
@@ -180,13 +187,13 @@ async def download_ytdl(
         except (MessageNotModified, FloodWait):
             pass
 
-    if _YTDL_STATE.get("status") in ("finished", "merging"):
+    if state.get("status") in ("finished", "merging"):
         logger.info(f"YTDL: Download complete for {url}")
-        total = _YTDL_STATE.get("total_bytes", 0)
+        total = state.get("total_bytes", 0)
         await update_progress(
             status_msg, url, file_index, total_files, user_name, start_time,
             total, total, "Done", "Done", dl_type="ytdl",
         )
         return True, "YTDL Download Complete", ""
-    logger.error(f"YTDL: Thread failed: {_YTDL_STATE.get('error')}")
-    return False, "", _YTDL_STATE.get("error", "YTDL thread failed")
+    logger.error(f"YTDL: Thread failed: {state.get('error')}")
+    return False, "", state.get("error", "YTDL thread failed")

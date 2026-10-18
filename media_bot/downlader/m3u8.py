@@ -352,9 +352,10 @@ async def download_m3u8(
             percentage = (done / total * 100) if total else None
             await update_progress(
                 status_msg, url, file_index, total_files, user_name, start_time,
-                size, 0, f"{done}/{total} segments", "N/A", dl_type="m3u8",
+                size, 0, "N/A", "N/A", dl_type="m3u8",
+                percentage=percentage,
+                total_size_str=f"{done}/{total} segments",
             )
-            _ = percentage
 
         out_path = await task
         if out_path and os.path.exists(out_path):

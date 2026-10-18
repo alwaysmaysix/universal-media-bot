@@ -1,7 +1,11 @@
 # cyberdrop-dl engine - the second general-purpose fallback.
 #
-# Because cyberdrop-dl writes files straight to disk, progress is estimated by
-# periodically summing the sizes of the files already present in the directory.
+# Progress is estimated by periodically summing the sizes of the files already
+# present in the directory, so the CLI UI is disabled (-‑ui DISABLED) and the
+# download starts immediately (--download). This also avoids needing a TTY,
+# which Colab does not provide.
+#
+# Valid --ui values: DISABLED | ACTIVITY | SIMPLE | FULLSCREEN.
 
 import asyncio
 import logging
@@ -35,6 +39,13 @@ async def get_cyberdrop_progress(dest_path):
         return None
 
 
+def _has_files(dest) -> bool:
+    try:
+        return any(p.is_file() for p in Path(dest).rglob("*"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def download_cyberdrop(
     url,
     dest,
@@ -46,7 +57,14 @@ async def download_cyberdrop(
 ):
     from pyrogram.errors import FloodWait, MessageNotModified
 
-    cmd_args = ["cyberdrop-dl", "--download", "--ui", "simple", "-d", str(dest), url]
+    cmd_args = [
+        "cyberdrop-dl",
+        "--ui", "DISABLED",       # no rich UI / no TTY required
+        "--download",             # skip UI, start downloading immediately
+        "--ignore-history",       # our dest is per-task; don't skip "seen" URLs
+        "-d", str(dest),
+        url,
+    ]
     proc = await runtime.spawn_exec(
         *cmd_args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
@@ -56,17 +74,16 @@ async def download_cyberdrop(
         nonlocal last_update
         while proc.returncode is None:
             await asyncio.sleep(2)
-            if time.time() - last_update > 2:
-                progress_data = await get_cyberdrop_progress(dest)
-                if progress_data and status_msg:
-                    try:
-                        display = build_custom_progress_display(
-                            url, progress_data, file_index, total_files, user_name, start_time
-                        )
-                        await status_msg.edit_text(display)
-                        last_update = time.time()
-                    except (MessageNotModified, FloodWait):
-                        pass
+            progress_data = await get_cyberdrop_progress(dest)
+            if progress_data and status_msg:
+                try:
+                    display = build_custom_progress_display(
+                        url, progress_data, file_index, total_files, user_name, start_time
+                    )
+                    await status_msg.edit_text(display)
+                    last_update = time.time()
+                except (MessageNotModified, FloodWait):
+                    pass
 
     monitor_task = asyncio.create_task(monitor_progress())
     stdout, stderr = await proc.communicate()
@@ -75,4 +92,8 @@ async def download_cyberdrop(
         await monitor_task
     except asyncio.CancelledError:
         pass
-    return proc.returncode == 0, stdout.decode(), stderr.decode()
+
+    # cyberdrop-dl can exit non-zero when some individual files fail; treat the
+    # run as successful if anything actually landed on disk.
+    success = proc.returncode == 0 or _has_files(dest)
+    return success, stdout.decode("utf-8", "ignore"), stderr.decode("utf-8", "ignore")

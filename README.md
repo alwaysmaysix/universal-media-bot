@@ -1,5 +1,13 @@
 # 🤖 Universal Media Bot
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/your-username/universal-media-bot/blob/main/Universal_Media_Bot.ipynb)
+
+> ▶️ **Run in Colab** — the badge above opens
+> [`Universal_Media_Bot.ipynb`](Universal_Media_Bot.ipynb), the ready-to-run
+> connector (clone repo → install tools → write credentials → start bot).
+> Replace `your-username` with your GitHub account first, or open
+> **File → Open notebook → GitHub** in Colab and paste your repo URL.
+
 A Pyrogram-based Telegram bot that downloads from many sources and re-uploads
 the files to Telegram (or a dump channel). The code is organised as a Python
 package that mirrors the layout of the classic **Telegram-Leecher** project,
@@ -32,7 +40,8 @@ one module per responsibility.
 - **Configurable fallback chain** for unknown links
 - **Torrent file selection** (list a magnet's files, download only some)
 - Album (media group) uploads, auto thumbnails, auto cleanup, dump-channel logging
-- Rich live progress display for every download engine
+- Rich live progress display for every download engine **and** for uploads
+  (same ⬢⬡ Task/Status/Done/Speed/ETA/Past/User layout)
 
 ### Commands
 
@@ -48,6 +57,31 @@ one module per responsibility.
 | `/cancelall` | Owner only — cancel everything |
 | `/broadcast <text>` | Owner only — message all known users |
 | `/stats`, `/help`, `/start` | Statistics / help / welcome |
+
+### 📊 Progress display
+
+Downloads and uploads share the same live `⬢⬡` layout, refreshed per status
+message (so concurrent users don't delay each other's updates):
+
+```
+#Task: [1/3] https://example.com/gallery
+➜ ⬢⬢⬢⬢⬡⬡⬡⬡⬡⬡ » 42.0%
+➜ Status : Download 📥 (gallery-dl)
+➜ Done   : 15.0 MB of 35.7 MB
+➜ Speed  : 2.3 MB/s
+➜ ETA    : 00:15
+➜ Past   : 0h0m12s
+➜ User   : Alice
+```
+
+| Engine | Progress source |
+| --- | --- |
+| `gdrive`, `telegram`, `magnet`, `mega`, `ytdl`, `aria2c`, `gallery-dl` | real bytes / percentage |
+| `m3u8` (HLS) | segment count (`12/40 segments`) |
+| `cyberdrop-dl` | files landed on disk (its CLI UI is disabled) |
+
+Each engine has its own throttle (≈2 s, 3 s for uploads) and every update runs
+per-chat, so one user's fast download no longer starves another's.
 
 ## 🔗 Supported sources
 
@@ -71,6 +105,7 @@ one module per responsibility.
 
 ```
 universal-media-bot/
+├── Universal_Media_Bot.ipynb  # the Colab badge target (same code as main.py)
 ├── main.py                 # Google Colab entry point (clone, install, run)
 ├── credentials.example.json
 ├── requirements.txt
@@ -157,7 +192,13 @@ Every key can also be supplied through an environment variable prefixed with
 python -m media_bot
 ```
 
-Or open `main.py` in Google Colab, fill the `@param` fields and run the cell.
+Or click the **Open in Colab** badge at the top of this README — it opens
+[`Universal_Media_Bot.ipynb`](Universal_Media_Bot.ipynb), fill the `@param`
+fields and run the cell. `main.py` contains the exact same connector code if you
+prefer to paste it into a blank notebook yourself.
+
+> 🔁 To use your own repo, edit the badge URL in this README (and `REPO_URL` in
+> the notebook) to point at `github.com/<you>/<repo>`.
 
 ---
 

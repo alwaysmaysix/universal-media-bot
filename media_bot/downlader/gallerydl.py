@@ -14,6 +14,7 @@ from media_bot.utility import runtime
 from media_bot.utility.helper import (
     build_custom_progress_display,
     parse_size_to_bytes,
+    strip_ansi_codes,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,22 +98,33 @@ async def download_gallery_dl(
 
     async def monitor_progress():
         nonlocal last_update
+        buffer = ""
         while True:
-            line = await proc.stderr.readline()
-            if not line:
+            # Read raw chunks: gallery-dl redraws its progress bar with "\r"
+            # (no newline), so readline() would block and we'd miss updates.
+            chunk = await proc.stderr.read(4096)
+            if not chunk:
                 break
-            decoded_line = line.decode("utf-8", errors="ignore")
-            stderr_lines.append(decoded_line)
-            progress_data = await parse_gallery_dl_progress(decoded_line)
-            if progress_data and status_msg and (time.time() - last_update > 2):
-                try:
-                    display = build_custom_progress_display(
-                        url, progress_data, file_index, total_files, user_name, start_time
-                    )
-                    await status_msg.edit_text(display)
-                    last_update = time.time()
-                except (MessageNotModified, FloodWait):
-                    pass
+            buffer += chunk.decode("utf-8", errors="ignore")
+            parts = re.split(r"[\r\n]", buffer)
+            buffer = parts.pop()  # keep the trailing partial line
+            for raw_line in parts:
+                line = strip_ansi_codes(raw_line).strip()
+                if not line:
+                    continue
+                stderr_lines.append(line + "\n")
+                progress_data = await parse_gallery_dl_progress(line)
+                if progress_data and status_msg and (time.time() - last_update > 2):
+                    try:
+                        display = build_custom_progress_display(
+                            url, progress_data, file_index, total_files, user_name, start_time
+                        )
+                        await status_msg.edit_text(display)
+                        last_update = time.time()
+                    except (MessageNotModified, FloodWait):
+                        pass
+        if buffer.strip():
+            stderr_lines.append(strip_ansi_codes(buffer))
 
     await asyncio.gather(proc.wait(), monitor_progress())
     stdout = (await proc.stdout.read()).decode("utf-8", errors="ignore")
