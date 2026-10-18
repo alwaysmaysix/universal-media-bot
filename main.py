@@ -16,11 +16,14 @@ BRANCH = "main"  # @param {type: "string"}
 CLEAN_CLONE = True  # @param {type: "boolean"}
 
 # @markdown ### 🔑 Telegram credentials
-API_ID = 18443762  # @param {type: "integer"}
-API_HASH = "a14eb15b00ffaa1f54a7bf93cd521e92"  # @param {type: "string"}
-BOT_TOKEN = "7454146246:AAGhnsCEjuxf6tIoxxUARbr1MxmN39O_5Ns"  # @param {type: "string"}
-USER_ID = 1091956543  # @param {type: "integer"}
-DUMP_ID = -1002521564194  # @param {type: "integer"}
+# @markdown Get `API_ID` / `API_HASH` from https://my.telegram.org and the bot
+# @markdown token from **@BotFather**. These are intentionally left blank — this
+# @markdown file is public on GitHub, so never commit real values.
+API_ID = 0  # @param {type: "integer"}
+API_HASH = ""  # @param {type: "string"}
+BOT_TOKEN = ""  # @param {type: "string"}
+USER_ID = 0  # @param {type: "integer"}
+DUMP_ID = 0  # @param {type: "integer"}
 
 # @markdown ### 🍪 Twitter / X cookies
 # @markdown Paste the JSON array (`[{"name":"auth_token","value":"..."}, ...]`) or leave empty.
@@ -43,6 +46,26 @@ RESET_SESSION = True  # @param {type: "boolean"}
 import subprocess, time, json, shutil, os
 from IPython.display import clear_output, display, HTML
 from threading import Thread
+
+# ---------------------------------------------------------------------------
+# The credential fields above are blank on purpose: this notebook lives in a
+# public repo. Fill the form, then run the cell.
+# ---------------------------------------------------------------------------
+_missing = [
+    name
+    for name, value in (("API_ID", API_ID), ("API_HASH", API_HASH), ("BOT_TOKEN", BOT_TOKEN))
+    if not value
+]
+if _missing:
+    raise SystemExit(
+        "❌ Missing credentials: "
+        + ", ".join(_missing)
+        + "\n   Fill the 🔑 Telegram credentials fields at the top of this cell and run it again."
+    )
+if not USER_ID:
+    print("⚠️  USER_ID is 0 - owner-only commands (/cancelall, /broadcast) are disabled.")
+if not DUMP_ID:
+    print("ℹ️  DUMP_ID is 0 - uploads go to the requesting chat; no dump-channel logging.")
 
 WORK_DIR = "/content/universal-media-bot"
 SESSION_FILE = f"{WORK_DIR}/media_bot.session"
@@ -93,7 +116,7 @@ audio_thread.start()
 _Thread = Thread(target=Loading, name="Prepare", args=())
 _Thread.start()
 
-# Normalise a raw channel id (e.g. 2521564194 -> -1002521564194)
+# Normalise a raw channel id (e.g. 1234567890 -> -1001234567890)
 if len(str(DUMP_ID)) == 10 and "-100" not in str(DUMP_ID):
     n_dump = "-100" + str(DUMP_ID)
     DUMP_ID = int(n_dump)

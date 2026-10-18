@@ -209,8 +209,14 @@ Or click the **Open in Colab** badge at the top of this README — it opens
 fields and run the cell. `main.py` contains the exact same connector code if you
 prefer to paste it into a blank notebook yourself.
 
-> 🔁 To use your own repo, edit the badge URL in this README (and `REPO_URL` in
-> the notebook) to point at `github.com/<you>/<repo>`.
+> 🔐 **The credential fields ship blank on purpose** — this repo is public, so
+> `API_ID`, `API_HASH`, `BOT_TOKEN` and the ids are never committed. Type them
+> into the Colab form (they stay in your Colab session) or, for a local run, into
+> the git-ignored `credentials.json`. The cell stops with
+> `❌ Missing credentials: ...` until they are filled.
+
+> 🔁 To use your own repo, run `python set_repo.py <owner>/<repo>` — it rewrites
+> the badge, `REPO_URL` and the notebook in one go.
 
 ---
 
