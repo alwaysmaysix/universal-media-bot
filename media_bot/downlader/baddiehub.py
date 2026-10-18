@@ -8,6 +8,7 @@ import logging
 import re
 from urllib.parse import urlparse
 
+from media_bot.utility import runtime
 from media_bot.utility.helper import (
     extract_media_urls,
     extract_urls,
@@ -103,7 +104,7 @@ async def download_baddiehub(url, dest):
         logger.info(f"Found {len(all_media)} media URLs")
         for media_url in all_media:
             cmd_args = ["cyberdrop-dl", "--download", "--ui", "DISABLED", "-d", str(dest), media_url]
-            proc = await asyncio.create_subprocess_exec(
+            proc = await runtime.spawn_exec(
                 *cmd_args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             await proc.communicate()

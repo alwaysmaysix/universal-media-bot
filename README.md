@@ -13,13 +13,41 @@ one module per responsibility.
 
 ## ✨ Features
 
-- Simple bot commands: `/dl`, `/batch`, `/stats`, `/help`, `/cancel`
-- Custom captions with `{filename}` `{size}` `{index}` `{total}` placeholders
-- Album (media group) uploads for image batches
-- Auto thumbnail generation for videos
-- Auto cleanup of temporary download folders
-- Optional dump-channel logging of every processed URL
+- Simple bot commands: `/dl`, `/batch`, `/settings`, `/history`, `/queue`,
+  `/status`, `/stats`, `/help`, `/cancel`
+- Also works **without a command**: just send a link, or use **inline mode**
+  (`@yourbot <link>`)
+- **Per-user settings keyboard** (persisted in SQLite):
+  engine, archive action, yt-dlp format, caption font, upload kind, split
+  options, prefix/suffix, custom thumbnail, destination and cookies
+- **Manual engines**: force `auto`, `gallery-dl`, `cyberdrop-dl`, `aria2c` or `megadl`
+- **Zip / Unzip**: compress, extract, or unzip-then-zip (split archives + passwords)
+- **Split oversized videos** with ffmpeg so they fit the Telegram limit
+- **Access control**: `ALLOWED_USERS` allowlist, owner-only commands and a
+  per-user rate limit
+- **Real cancellation**: `/cancel` (or the ✘ Cancel button) kills the running
+  subprocesses, not just the state
+- **Quotas** per day (files / GB) and **download history** with `/redo`
+- **Per-site cookies** (Twitter, Instagram, TikTok, Reddit, Pixiv, Facebook)
+- **Configurable fallback chain** for unknown links
+- **Torrent file selection** (list a magnet's files, download only some)
+- Album (media group) uploads, auto thumbnails, auto cleanup, dump-channel logging
 - Rich live progress display for every download engine
+
+### Commands
+
+| Command | Description |
+| --- | --- |
+| `/dl` / `/batch` | Single / batch download to Telegram |
+| `/settings` | All per-user options (engine, zip, format, cookies, …) |
+| `/history` | Last 10 downloads with one-tap **Redo** |
+| `/redo <id>` | Re-run a history entry |
+| `/queue` | Running downloads |
+| `/status` | Your settings, destination and today's quota |
+| `/cancel` | Cancel **your** running download (kills processes) |
+| `/cancelall` | Owner only — cancel everything |
+| `/broadcast <text>` | Owner only — message all known users |
+| `/stats`, `/help`, `/start` | Statistics / help / welcome |
 
 ## 🔗 Supported sources
 
@@ -34,6 +62,7 @@ one module per responsibility.
 | HLS / `m3u8` streams | built-in segment downloader + `ffmpeg` |
 | Most image/video galleries | gallery-dl |
 | Most direct hosts | cyberdrop-dl |
+| Any direct link (multi-connection) | `aria2c` |
 | BaddieHub pages | custom scraper + cyberdrop-dl |
 
 ---
@@ -54,6 +83,7 @@ universal-media-bot/
     │   ├── manager.py       # master dispatcher + downloadManager()
     │   ├── gallerydl.py     # gallery-dl engine
     │   ├── cyberdrop.py     # cyberdrop-dl engine
+    │   ├── aria2c.py        # aria2c engine (manual selection)
     │   ├── baddiehub.py     # BaddieHub scraper
     │   ├── gdrive.py        # Google Drive
     │   ├── telegram.py      # t.me links
@@ -65,9 +95,13 @@ universal-media-bot/
     ├── uploader/
     │   └── telegram.py      # upload_to_telegram / album uploads
     ├── utility/
-    │   ├── variables.py     # Config / Paths / Stats / shared state
-    │   ├── helper.py        # progress display, captions, thumbnails, scraping
+    │   ├── variables.py     # Config / Paths / Prefs / shared state
+    │   ├── store.py         # SQLite: prefs, stats, history, quotas
+    │   ├── runtime.py       # task + subprocess registry, cancellation
+    │   ├── security.py      # allowlist, owner-only, rate limiting
+    │   ├── helper.py        # progress display, captions, cookies, thumbnails
     │   ├── handler.py       # message cleanup + dump-channel logging
+    │   ├── converters.py    # zip / unzip / split-video helpers
     │   └── task_manager.py  # process_urls() request lifecycle
     └── tools/
         ├── code_cleaner.py  # strip selected blocks from a source file
@@ -84,8 +118,8 @@ universal-media-bot/
 pip install -r requirements.txt
 
 # system tools:
-apt-get install -y ffmpeg megatools     # Debian/Ubuntu
-# brew install ffmpeg megatools         # macOS
+apt-get install -y ffmpeg megatools aria2 p7zip-full unrar-free   # Debian/Ubuntu
+# brew install ffmpeg megatools aria2 p7zip unar                    # macOS
 ```
 
 ### 2. Provide credentials
@@ -100,14 +134,22 @@ cp credentials.example.json credentials.json
 | --- | --- |
 | `API_ID`, `API_HASH` | from <https://my.telegram.org> |
 | `BOT_TOKEN` | from [@BotFather](https://t.me/BotFather) |
+| `OWNER` | your Telegram user id (unlocks owner commands) |
 | `DUMP_CHANNEL_ID` | channel to upload/log to (`0` = upload to the user chat) |
+| `ALLOWED_USERS` | list of user ids allowed to use the bot (`[]` = open to everyone) |
+| `RATE_LIMIT_SECONDS` | cooldown between downloads per user (`0` = off) |
+| `QUOTA_FILES_PER_DAY`, `QUOTA_GB_PER_DAY` | daily limits per user (`0` = unlimited) |
+| `RESUME` | resume partial downloads where the engine supports it |
+| `SPLIT_SIZE_MB` | part size for split archives / split videos |
+| `FALLBACK_CHAIN` | order of generic engines, e.g. `["gallerydl","cyberdrop","aria2c"]` |
 | `TWITTER_COOKIES` | JSON list of `{name, value}` cookies for Twitter/X |
 | `DOWNLOAD_PATH` | where files are downloaded (default `./Downloads`) |
 
 Every key can also be supplied through an environment variable prefixed with
 `MEDIA_BOT_` (e.g. `MEDIA_BOT_BOT_TOKEN`), which overrides `credentials.json`.
 
-`credentials.json` is **git-ignored** — never commit it.
+`credentials.json` is **git-ignored** — never commit it. The SQLite database
+(`media_bot.db`), `cookies/` and `thumbs/` are ignored too.
 
 ### 3. Run
 
@@ -136,10 +178,33 @@ python -m media_bot.tools.code_cleaner New_Text_Document.txt bot_cleaned.py
 
 ## 📖 Usage
 
-1. Send `/dl` (single) or `/batch` (multiple URLs).
-2. Choose a caption: default, or a custom template with placeholders.
+1. Send `/dl` (single) or `/batch` (multiple URLs) — or just paste a link.
+2. Choose a caption — default, custom template — or open **⚙️ Download Options**.
 3. Send the URL(s) — one per line — or upload a `.txt` file with one URL per line.
-4. The bot downloads, then uploads each file (albums for image batches).
+4. The bot downloads, applies the chosen archive action, then uploads the files.
+5. Press **✘ Cancel** on the status message to abort at any time.
+
+### ⚙️ Settings keyboard (`/settings`)
+
+| Button | What it does |
+| --- | --- |
+| 🎛 Download Engine | Force `auto`, `gallery-dl`, `cyberdrop-dl`, `aria2c` or `megadl` |
+| 🗜 Archive Action | `Regular` · `Compress` · `Extract` · `Unzip then Zip` |
+| 🎬 Video Format | yt-dlp quality: best / 1080p / 720p / 480p / smallest / audio |
+| 🔤 Caption Font | default / bold / monospace / spoiler |
+| 📤 Upload | Send files as media (streamable) or as documents |
+| 🍪 Cookies | Per-site Netscape cookies for gallery-dl / yt-dlp |
+| ✂️ Split Zip / 🎬 Split Video | Split archives / oversized videos into parts |
+| 🔐 / 🔓 Password | Set (or clear) the zip / unzip password |
+| 🔗 Fallback Chain | Which generic engines Auto may try, and in what order |
+| 📂 Torrent Files | List a magnet's files and download only chosen indices |
+| 🖼 Thumbnail | Send a photo to use as your custom video thumbnail |
+| 🎯 Destination | Upload to a specific chat/channel instead of the default |
+| ✏️ Prefix / Suffix | Extra text prepended / appended to every caption |
+| ♻️ Reset Defaults / ✘ Close | Restore defaults / close the menu |
+
+Settings are **per chat** and stored in SQLite, so they survive restarts. Zip and
+unzip output is always uploaded as documents.
 
 ---
 

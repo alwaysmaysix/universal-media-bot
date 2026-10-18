@@ -8,7 +8,9 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
+from media_bot.utility import runtime
 from media_bot.utility.helper import (
     build_custom_progress_display,
     parse_size_to_bytes,
@@ -75,16 +77,19 @@ async def download_gallery_dl(
     total_files=1,
     user_name="User",
     start_time=0,
+    cookies_file=None,
 ):
     from pyrogram.errors import FloodWait, MessageNotModified
 
     cmd = ["gallery-dl", "-d", str(dest)]
+    if cookies_file and Path(cookies_file).exists():
+        cmd.extend(["--cookies", str(cookies_file)])
     combined_filter = _build_date_filter(after_date, before_date)
     if combined_filter:
         cmd.extend(["--filter", combined_filter])
     cmd.append(url)
 
-    proc = await asyncio.create_subprocess_exec(
+    proc = await runtime.spawn_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     last_update = time.time()

@@ -50,8 +50,22 @@ async def progress_cb(current, total, msg, start_time, filename):
         pass
 
 
-async def upload_to_telegram(client, file_chat_id, file_path, caption=None, max_retries=3, progress_chat_id=None):
-    """Upload a single file, choosing video / photo / document based on the suffix."""
+async def upload_to_telegram(
+    client,
+    file_chat_id,
+    file_path,
+    caption=None,
+    max_retries=3,
+    progress_chat_id=None,
+    as_document=False,
+    thumb_override=None,
+):
+    """Upload a single file, choosing video / photo / document based on the suffix.
+
+    When `as_document` is True the file is always sent as a document (used for
+    archives produced by the zip/unzip action). `thumb_override` replaces the
+    auto-generated video thumbnail with the user's own.
+    """
     file_path_p = Path(file_path)
     filename = file_path_p.name
     target_chat_id = progress_chat_id if progress_chat_id else file_chat_id
@@ -84,17 +98,22 @@ async def upload_to_telegram(client, file_chat_id, file_path, caption=None, max_
 
         for attempt in range(max_retries):
             try:
-                if ext in VIDEO_EXTS:
-                    thumb, duration, width, height = generate_thumbnail(file_path)
+                if not as_document and ext in VIDEO_EXTS:
+                    gen_thumb, duration, width, height = generate_thumbnail(file_path)
+                    thumb = (
+                        thumb_override
+                        if (thumb_override and Path(thumb_override).exists())
+                        else gen_thumb
+                    )
                     await client.send_video(
                         file_chat_id, file_path, caption=cap, thumb=thumb,
                         duration=duration or None, width=width or None, height=height or None,
                         supports_streaming=True, progress=progress_cb,
                         progress_args=(progress_msg, time.time(), filename),
                     )
-                    if thumb and Path(thumb).exists():
-                        Path(thumb).unlink()
-                elif ext in IMAGE_EXTS:
+                    if gen_thumb and gen_thumb != thumb and Path(gen_thumb).exists():
+                        Path(gen_thumb).unlink()
+                elif not as_document and ext in IMAGE_EXTS:
                     await client.send_photo(
                         file_chat_id, file_path, caption=cap, progress=progress_cb,
                         progress_args=(progress_msg, time.time(), filename),
@@ -149,13 +168,34 @@ async def upload_file_with_album(
     max_retries=3,
     progress_chat_id=None,
     baddiehub_titles=None,
+    as_document=False,
+    prefs=None,
 ):
-    """Upload a batch of files, grouping consecutive images into media albums."""
+    """Upload a batch of files, grouping consecutive images into media albums.
+
+    `as_document=True` sends everything as documents and disables albums (used
+    for archive output). `prefs` supplies prefix / suffix / caption font and the
+    per-user thumbnail.
+    """
     files = [Path(f) for f in files]
-    images = [f for f in files if f.suffix.lower() in IMAGE_EXTS]
-    videos = [f for f in files if f.suffix.lower() in VIDEO_EXTS]
-    others = [f for f in files if f not in images and f not in videos]
+    if as_document:
+        images, videos, others = [], [], list(files)
+    else:
+        images = [f for f in files if f.suffix.lower() in IMAGE_EXTS]
+        videos = [f for f in files if f.suffix.lower() in VIDEO_EXTS]
+        others = [f for f in files if f not in images and f not in videos]
     uploaded = 0
+
+    prefix = getattr(prefs, "prefix", "") or ""
+    suffix = getattr(prefs, "suffix", "") or ""
+    font = getattr(prefs, "caption_font", "default") or "default"
+    thumb_override = getattr(prefs, "thumbnail", None)
+
+    def make_caption(path, index):
+        return format_caption(
+            caption_template, path.name, path.stat().st_size, index, len(files),
+            prefix=prefix, suffix=suffix, font=font,
+        )
 
     def title_caption():
         if not baddiehub_titles:
@@ -164,15 +204,13 @@ async def upload_file_with_album(
 
     def image_caption(img_path, index):
         if caption_template is None and baddiehub_titles:
-            cap = title_caption()
-            return cap or format_caption(None, img_path.name, img_path.stat().st_size, index, len(files))
-        return format_caption(caption_template, img_path.name, img_path.stat().st_size, index, len(files))
+            return title_caption() or make_caption(img_path, index)
+        return make_caption(img_path, index)
 
     def file_caption(path, index):
         if caption_template is None and baddiehub_titles:
-            cap = title_caption()
-            return cap or format_caption(None, path.name, path.stat().st_size, index, len(files))
-        return format_caption(caption_template, path.name, path.stat().st_size, index, len(files))
+            return title_caption() or make_caption(path, index)
+        return make_caption(path, index)
 
     if Config.SEND_AS_ALBUM and len(images) > 1:
         for i in range(0, len(images), Config.ALBUM_SIZE):
@@ -201,21 +239,27 @@ async def upload_file_with_album(
     else:
         for idx, img in enumerate(images, 1):
             if await upload_to_telegram(
-                client, file_chat_id, str(img), image_caption(img, idx), progress_chat_id=progress_chat_id
+                client, file_chat_id, str(img), image_caption(img, idx),
+                progress_chat_id=progress_chat_id, as_document=as_document,
+                thumb_override=thumb_override,
             ):
                 uploaded += 1
             await asyncio.sleep(Config.DELAY_BETWEEN_FILES)
 
     for idx, video in enumerate(videos, len(images) + 1):
         if await upload_to_telegram(
-            client, file_chat_id, str(video), file_caption(video, idx), progress_chat_id=progress_chat_id
+            client, file_chat_id, str(video), file_caption(video, idx),
+            progress_chat_id=progress_chat_id, as_document=as_document,
+            thumb_override=thumb_override,
         ):
             uploaded += 1
         await asyncio.sleep(Config.DELAY_BETWEEN_FILES)
 
     for idx, other in enumerate(others, len(images) + len(videos) + 1):
         if await upload_to_telegram(
-            client, file_chat_id, str(other), file_caption(other, idx), progress_chat_id=progress_chat_id
+            client, file_chat_id, str(other), file_caption(other, idx),
+            progress_chat_id=progress_chat_id, as_document=as_document,
+            thumb_override=thumb_override,
         ):
             uploaded += 1
         await asyncio.sleep(Config.DELAY_BETWEEN_FILES)

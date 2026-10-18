@@ -26,6 +26,11 @@ BOT_WORK/
 # Logs & data
 *.log
 gen_dump_files/
+media_bot.db
+media_bot.db-journal
+media_bot.db-wal
+cookies/
+thumbs/
 
 # Test / scratch files
 test*.*

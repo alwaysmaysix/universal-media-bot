@@ -119,7 +119,7 @@ else:
     cmd = f"cd {WORK_DIR} && git fetch --all && git reset --hard origin/{BRANCH}"
     proc = subprocess.run(cmd, shell=True)
 
-cmd = "apt update && apt install -y ffmpeg megatools"
+cmd = "apt update && apt install -y ffmpeg megatools aria2 p7zip-full unrar-free"
 proc = subprocess.run(cmd, shell=True)
 
 cmd = f"pip3 install -r {WORK_DIR}/requirements.txt"

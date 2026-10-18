@@ -8,6 +8,7 @@ import asyncio
 import logging
 import threading
 import time
+from pathlib import Path
 
 from humanize import naturalsize
 
@@ -93,9 +94,19 @@ def _write_cookie_file_if_needed(url, cookies):
             logger.warning(f"Could not write twitter cookie file: {exc}")
 
 
+FORMAT_PRESETS = {
+    "best": ("bestvideo+bestaudio/best", "mp4", None),
+    "1080": ("bestvideo[height<=1080]+bestaudio/best[height<=1080]", "mp4", None),
+    "720": ("bestvideo[height<=720]+bestaudio/best[height<=720]", "mp4", None),
+    "480": ("bestvideo[height<=480]+bestaudio/best[height<=480]", "mp4", None),
+    "worst": ("worstvideo+worstaudio/worst", "mp4", None),
+    "audio": ("bestaudio/best", None, "mp3"),
+}
+
+
 async def download_ytdl(
     url, dest, status_msg, file_index, total_files, user_name, start_time,
-    after_date=None, before_date=None,
+    after_date=None, before_date=None, ytdl_format="best", cookies_file=None, resume=True,
 ):
     """Download from a yt-dlp supported site using a worker thread."""
     from pyrogram.errors import FloodWait, MessageNotModified
@@ -108,23 +119,36 @@ async def download_ytdl(
          "total_bytes": 0, "speed": "N/A", "eta": "N/A"}
     )
 
+    fmt, merge_ext, audio_ext = FORMAT_PRESETS.get(ytdl_format, FORMAT_PRESETS["best"])
+
     ydl_opts = {
         "outtmpl": str(dest / "%(title)s [%(id)s].%(ext)s"),
         "progress_hooks": [_ytdl_progress_hook],
         "logger": _YTDLLogger(),
-        "cookiefile": str(Paths.TWITTER_COOKIE_FILE),
         "writethumbnail": True,
         "concurrent_fragment_downloads": 4,
         "overwrites": True,
+        "continuedl": bool(resume),
         "writesubtitles": True,
         "subtitleslangs": ["all"],
         "user_agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ),
-        "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-        "merge_output_format": "mp4",
+        "format": fmt,
     }
+    if merge_ext:
+        ydl_opts["merge_output_format"] = merge_ext
+    if audio_ext:
+        ydl_opts["postprocessors"] = [
+            {"key": "FFmpegExtractAudio", "preferredcodec": audio_ext}
+        ]
+
+    cookie_path = cookies_file or Paths.TWITTER_COOKIE_FILE
+    _write_cookie_file_if_needed(url, Config.TWITTER_COOKIES)
+    if cookie_path and Path(cookie_path).exists():
+        ydl_opts["cookiefile"] = str(cookie_path)
+
     if after_date:
         ydl_opts["dateafter"] = after_date
     if before_date:

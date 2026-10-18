@@ -8,6 +8,7 @@ import logging
 import time
 from pathlib import Path
 
+from media_bot.utility import runtime
 from media_bot.utility.helper import build_custom_progress_display
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ async def download_cyberdrop(
     from pyrogram.errors import FloodWait, MessageNotModified
 
     cmd_args = ["cyberdrop-dl", "--download", "--ui", "simple", "-d", str(dest), url]
-    proc = await asyncio.create_subprocess_exec(
+    proc = await runtime.spawn_exec(
         *cmd_args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
     last_update = time.time()

@@ -36,3 +36,5 @@ psutil
 #       Install it with:  apt-get install -y megatools   (Debian/Ubuntu)
 #                         brew install megatools         (macOS)
 #       `ffmpeg`/`ffprobe` are also required and installed the same way.
+#       For the zip/unzip action and the aria2c engine you additionally need:
+#         apt-get install -y aria2 p7zip-full unrar-free

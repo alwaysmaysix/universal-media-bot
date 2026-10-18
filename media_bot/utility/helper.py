@@ -61,14 +61,95 @@ def strip_ansi_codes(text: str) -> str:
     return ANSI_ESCAPE.sub("", text)
 
 
-def write_twitter_cookie_file(cookies: dict) -> Path:
-    """Write cookies in Netscape format for yt-dlp / gallery-dl."""
-    path = Paths.TWITTER_COOKIE_FILE
+def write_cookies(cookies: dict, path, domain: str = ".twitter.com") -> Path:
+    """Write cookies in Netscape format for yt-dlp / gallery-dl / aria2c."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as file:
         file.write("# Netscape HTTP Cookie File\n")
         for name, value in cookies.items():
-            file.write(f".twitter.com\tTRUE\t/\tTRUE\t0\t{name}\t{value}\n")
+            file.write(f"{domain}\tTRUE\t/\tTRUE\t0\t{name}\t{value}\n")
     return path
+
+
+def write_twitter_cookie_file(cookies: dict) -> Path:
+    """Write the configured Twitter cookies to the default cookie file."""
+    return write_cookies(cookies, Paths.TWITTER_COOKIE_FILE, ".twitter.com")
+
+
+def cookie_file_for(chat_id, site: str) -> Path:
+    """Per-user, per-site Netscape cookie file path."""
+    return Paths.COOKIES_DIR / f"{chat_id}_{site}.txt"
+
+
+def cookie_domain(site: str) -> str:
+    return {
+        "twitter": ".twitter.com",
+        "instagram": ".instagram.com",
+        "tiktok": ".tiktok.com",
+        "reddit": ".reddit.com",
+        "pixiv": ".pixiv.net",
+        "facebook": ".facebook.com",
+    }.get(site, f".{site}.com")
+
+
+def set_cookie_file(chat_id, site: str, cookies: dict) -> Path:
+    """Persist a user's cookies for one site and return the cookie file path."""
+    return write_cookies(cookies, cookie_file_for(chat_id, site), cookie_domain(site))
+
+
+def build_user_cookie_file(chat_id):
+    """Merge every per-site cookie file for a user into one Netscape file.
+
+    Downloaders accept a single cookie file and match by domain, so merging is
+    enough to cover Twitter, Instagram, TikTok, ... at once.
+    """
+    if not Paths.COOKIES_DIR.exists():
+        return None
+    parts = [
+        f
+        for f in sorted(Paths.COOKIES_DIR.glob(f"{chat_id}_*.txt"))
+        if not f.name.endswith("_all.txt")
+    ]
+    global_file = Path(Paths.TWITTER_COOKIE_FILE)
+    if global_file.exists():
+        parts.append(global_file)
+    merged = Paths.COOKIES_DIR / f"{chat_id}_all.txt"
+    if not parts:
+        if merged.exists():
+            merged.unlink()
+        return None
+    with open(merged, "w", encoding="utf-8") as out:
+        out.write("# Netscape HTTP Cookie File\n")
+        for part in parts:
+            try:
+                for line in part.read_text(encoding="utf-8").splitlines():
+                    if line and not line.startswith("#"):
+                        out.write(line + "\n")
+            except Exception:  # noqa: BLE001
+                continue
+    return merged
+
+
+def sizeChecker(url, max_bytes: int):
+    """Best-effort HEAD request.
+
+    Returns (ok, size_bytes). ok is False only when the remote size is known
+    and exceeds max_bytes.
+    """
+    if not url.startswith(("http://", "https://")):
+        return True, 0
+    try:
+        response = requests.head(
+            url, allow_redirects=True, timeout=10, verify=certifi.where()
+        )
+        length = int(response.headers.get("Content-Length", 0) or 0)
+        if length and max_bytes and length > max_bytes:
+            return False, length
+        return True, length
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"sizeChecker failed for {url}: {exc}")
+        return True, 0
 
 
 def create_gallery_config(cookies: dict) -> None:
@@ -170,7 +251,7 @@ def build_custom_progress_display(
 
     dl_type = progress_data.get("type", "unknown")
 
-    if dl_type in ["gdrive", "telegram", "ytdl", "magnet", "mega", "m3u8"]:
+    if dl_type in ["gdrive", "telegram", "ytdl", "magnet", "mega", "m3u8", "aria2c"]:
         status_str = f"Download 📥 ({dl_type})"
         percentage = progress_data.get("percentage")
         if percentage is not None:
@@ -264,18 +345,45 @@ async def update_progress(
 _TWITTER_SAFE = re.compile(r"\W")
 
 
-def format_caption(template, filename, file_size, current: int = 1, total: int = 1) -> str:
+def apply_font(text: str, font: str = "default") -> str:
+    """Wrap a caption in Telegram markup for the chosen 'caption font'."""
+    if not text:
+        return text
+    if font == "bold":
+        return f"**{text}**"
+    if font == "mono":
+        return f"`{text}`"
+    if font == "spoiler":
+        return f"||{text}||"
+    return text
+
+
+def format_caption(
+    template,
+    filename,
+    file_size,
+    current: int = 1,
+    total: int = 1,
+    prefix: str = "",
+    suffix: str = "",
+    font: str = "default",
+) -> str:
     """Fill placeholders {filename}/{size}/{index}/{total} (max 1024 chars)."""
     if not template:
         caption = f"📄 {filename}\n💾 {naturalsize(file_size)}"
         if total > 1:
             caption = f"[{current}/{total}] " + caption
-        return caption[:1024]
-    caption = template
-    caption = caption.replace("{filename}", filename)
-    caption = caption.replace("{size}", naturalsize(file_size))
-    caption = caption.replace("{index}", str(current))
-    caption = caption.replace("{total}", str(total))
+    else:
+        caption = template
+        caption = caption.replace("{filename}", filename)
+        caption = caption.replace("{size}", naturalsize(file_size))
+        caption = caption.replace("{index}", str(current))
+        caption = caption.replace("{total}", str(total))
+    if prefix:
+        caption = f"{prefix}{caption}"
+    if suffix:
+        caption = f"{caption}{suffix}"
+    caption = apply_font(caption, font)
     return caption[:1024]
 
 

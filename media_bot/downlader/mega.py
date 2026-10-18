@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 
+from media_bot.utility import runtime
 from media_bot.utility.helper import parse_size_to_bytes, update_progress
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ async def download_mega(url, dest, status_msg, file_index, total_files, user_nam
     """Download a Mega file/folder using megadl."""
     try:
         cmd_args = ["megadl", "--no-ask-password", "--path", str(dest), url]
-        proc = await asyncio.create_subprocess_exec(
+        proc = await runtime.spawn_exec(
             *cmd_args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
         )
         logger.info(f"Mega: Starting download for {url}")
