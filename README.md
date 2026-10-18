@@ -1,12 +1,23 @@
 # 🤖 Universal Media Bot
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/your-username/universal-media-bot/blob/main/Universal_Media_Bot.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/alwaysmaysix/universal-media-bot/blob/main/Universal_Media_Bot.ipynb)
 
 > ▶️ **Run in Colab** — the badge above opens
 > [`Universal_Media_Bot.ipynb`](Universal_Media_Bot.ipynb), the ready-to-run
 > connector (clone repo → install tools → write credentials → start bot).
-> Replace `your-username` with your GitHub account first, or open
-> **File → Open notebook → GitHub** in Colab and paste your repo URL.
+>
+> ⚠️ **The badge only works once this repo is public at the URL above.** Colab
+> resolves the notebook through the GitHub API, so a placeholder owner (or a
+> *private* repo) fails with `CustomError: ... {"status": 404}`. Set your account
+> once with:
+>
+> ```bash
+> python set_repo.py <owner>/<repo>        # e.g. python set_repo.py alice/universal-media-bot
+> ```
+>
+> Not published yet? Open <https://colab.research.google.com>, choose **Upload**
+> and drop in `Universal_Media_Bot.ipynb` — the bot still needs `REPO_URL` to
+> point at a repo Colab can clone.
 
 A Pyrogram-based Telegram bot that downloads from many sources and re-uploads
 the files to Telegram (or a dump channel). The code is organised as a Python
@@ -107,6 +118,7 @@ per-chat, so one user's fast download no longer starves another's.
 universal-media-bot/
 ├── Universal_Media_Bot.ipynb  # the Colab badge target (same code as main.py)
 ├── main.py                 # Google Colab entry point (clone, install, run)
+├── set_repo.py             # one-shot: point README/main.py/notebook at your repo
 ├── credentials.example.json
 ├── requirements.txt
 ├── custom_thmb.jpg         # default thumbnail

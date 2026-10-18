@@ -11,7 +11,7 @@
 # @markdown <br><br>
 
 # @markdown ### 🔗 Your repository
-REPO_URL = "https://github.com/your-username/universal-media-bot"  # @param {type: "string"}
+REPO_URL = "https://github.com/alwaysmaysix/universal-media-bot"  # @param {type: "string"}
 BRANCH = "main"  # @param {type: "string"}
 CLEAN_CLONE = True  # @param {type: "boolean"}
 
