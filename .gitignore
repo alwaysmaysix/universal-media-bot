@@ -1,0 +1,39 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Secrets & runtime session state (NEVER commit these)
+credentials.json
+token.json
+token.pickle
+twitter_cookies.txt
+*.session
+*.session-journal
+
+# Download / working directories
+Downloads/
+download/
+BOT_WORK/
+.aria2/
+
+# Logs & data
+*.log
+gen_dump_files/
+
+# Test / scratch files
+test*.*
+testing_purpose/
+*.bak
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

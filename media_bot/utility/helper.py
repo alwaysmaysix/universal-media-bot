@@ -1,0 +1,437 @@
+# Small, dependency-light helpers shared across the bot.
+#
+# Ported from the original notebook: cookie parsing, size parsing, the
+# "iZombie" style progress display, caption formatting, thumbnail generation
+# and the network scrapers used by the BaddieHub downloader.
+
+import json
+import logging
+import re
+import subprocess
+import time
+from datetime import timedelta
+from pathlib import Path
+from urllib.parse import urlparse
+
+import certifi
+import requests
+from humanize import naturalsize
+
+from media_bot.utility.variables import Paths, Trackers
+
+logger = logging.getLogger(__name__)
+
+ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+TRACKER_FILES = [
+    ("best_aria2.txt", "https://cf.trackerslist.com/best_aria2.txt"),
+    ("all_aria2.txt", "https://cf.trackerslist.com/all_aria2.txt"),
+]
+DEFAULT_TRACKERS = [
+    "udp://tracker.openbittorrent.com:80/announce",
+    "udp://tracker.opentrackr.org:1337/announce",
+]
+
+
+# --------------------------------------------------------------------------- #
+# Cookie / text helpers
+# --------------------------------------------------------------------------- #
+def parse_cookies(cookie_data):
+    """Accept a JSON string, list or dict of cookies and return {name: value}."""
+    if not cookie_data:
+        return {}
+    if isinstance(cookie_data, str):
+        try:
+            cookie_data = json.loads(cookie_data.strip())
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Cookie parse error: {exc}")
+            return {}
+    cookies = {}
+    if isinstance(cookie_data, list):
+        for cookie in cookie_data:
+            if isinstance(cookie, dict) and "name" in cookie and "value" in cookie:
+                cookies[cookie["name"]] = cookie["value"]
+    elif isinstance(cookie_data, dict):
+        cookies = dict(cookie_data)
+    return cookies
+
+
+def strip_ansi_codes(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return ANSI_ESCAPE.sub("", text)
+
+
+def write_twitter_cookie_file(cookies: dict) -> Path:
+    """Write cookies in Netscape format for yt-dlp / gallery-dl."""
+    path = Paths.TWITTER_COOKIE_FILE
+    with open(path, "w", encoding="utf-8") as file:
+        file.write("# Netscape HTTP Cookie File\n")
+        for name, value in cookies.items():
+            file.write(f".twitter.com\tTRUE\t/\tTRUE\t0\t{name}\t{value}\n")
+    return path
+
+
+def create_gallery_config(cookies: dict) -> None:
+    """Create ~/.config/gallery-dl/config.json with the Twitter cookies."""
+    config_dir = Path.home() / ".config" / "gallery-dl"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config = {
+        "extractor": {
+            "twitter": {"cookies": cookies},
+            "base-directory": str(Paths.DOWN_PATH),
+        }
+    }
+    with open(config_dir / "config.json", "w", encoding="utf-8") as file:
+        json.dump(config, file, indent=2)
+    logger.info("Gallery-dl config created")
+
+
+# --------------------------------------------------------------------------- #
+# Size / time / progress formatting
+# --------------------------------------------------------------------------- #
+def parse_size_to_bytes(size_str) -> float:
+    """Parse strings like '15.3MiB' into bytes."""
+    if not size_str:
+        return 0
+    match = re.match(r"([\d.]+)\s*(\w+)", str(size_str))
+    if not match:
+        try:
+            return float(size_str)
+        except (TypeError, ValueError):
+            return 0
+    value, unit = match.groups()
+    value = float(value)
+    unit = unit.lower()
+    units = {
+        "b": 1,
+        "kb": 1000**1,
+        "mb": 1000**2,
+        "gb": 1000**3,
+        "tb": 1000**4,
+        "kib": 1024**1,
+        "mib": 1024**2,
+        "gib": 1024**3,
+        "tib": 1024**4,
+    }
+    if unit.endswith("s"):
+        unit = unit[:-1]
+    return value * units.get(unit, 1)
+
+
+def format_time_hms(seconds) -> str:
+    """Format seconds into a compact Hh Mm Ss string."""
+    if seconds is None:
+        return "N/A"
+    try:
+        seconds = int(seconds)
+        total = timedelta(seconds=seconds).total_seconds()
+        hours, remainder = divmod(total, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{int(hours)}h{int(minutes)}m{int(seconds)}s"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def generate_progress_bar(percentage, total_blocks: int = 10) -> str:
+    """Build the ⬢⬡ progress bar."""
+    if percentage is None:
+        return "⬡" * total_blocks
+    filled = int(total_blocks * (percentage / 100))
+    filled = max(0, min(total_blocks, filled))
+    return "⬢" * filled + "⬡" * (total_blocks - filled)
+
+
+def build_custom_progress_display(
+    url, progress_data, file_index, total_files, user_name, start_time
+) -> str:
+    """Build the custom 'iZombie' style progress display."""
+    task_name = f"[{file_index}/{total_files}] {url[:50]}..."
+    elapsed_str = format_time_hms(time.time() - start_time)
+    status_str = "Download 📥"
+
+    if not progress_data:
+        return (
+            f"#Task: {task_name}\n"
+            "➜ ⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡ » ? %\n"
+            "➜ Status : Initializing...\n"
+            "➜ Done   : 0 MB of ? MB\n"
+            "➜ Speed  : ...\n"
+            "➜ ETA    : ...\n"
+            f"➜ Past   : {elapsed_str}\n"
+            f"➜ User   : {user_name}"
+        )
+
+    bar = "⬡⬡⬡⬡⬡⬡⬡⬡⬡⬡"
+    percentage_str = "N/A %"
+    done_str = "N/A"
+    total_str = "Unknown"
+    speed_str = "N/A"
+    eta_str = "N/A"
+
+    dl_type = progress_data.get("type", "unknown")
+
+    if dl_type in ["gdrive", "telegram", "ytdl", "magnet", "mega", "m3u8"]:
+        status_str = f"Download 📥 ({dl_type})"
+        percentage = progress_data.get("percentage")
+        if percentage is not None:
+            bar = generate_progress_bar(percentage)
+            percentage_str = f"{percentage:.1f}%"
+        done_str = naturalsize(progress_data.get("downloaded_bytes", 0))
+        total_str = progress_data.get("total_size_str", "Unknown")
+        speed_str = progress_data.get("speed", "N/A")
+        eta_str = progress_data.get("eta", "N/A")
+    elif dl_type == "gallery-dl":
+        status_str = "Download 📥 (gallery-dl)"
+        percentage = progress_data.get("percentage")
+        if percentage is not None:
+            bar = generate_progress_bar(percentage)
+            percentage_str = f"{percentage:.1f}%"
+        done_str = naturalsize(progress_data.get("downloaded_bytes", 0))
+        total_str = progress_data.get("total_size_str", "Unknown")
+        speed_str = progress_data.get("speed", "N/A")
+        eta_raw = progress_data.get("eta")
+        if eta_raw:
+            try:
+                parts = eta_raw.split(":")
+                eta_sec = 0
+                if len(parts) == 2:
+                    eta_sec = int(parts[0]) * 60 + int(parts[1])
+                elif len(parts) == 3:
+                    eta_sec = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                eta_str = format_time_hms(eta_sec)
+            except (TypeError, ValueError):
+                eta_str = "N/A"
+    elif dl_type == "cyberdrop-dl":
+        done_str = naturalsize(progress_data.get("downloaded_bytes", 0))
+        status_str = f"Download 📥 ({progress_data.get('completed_files', 0)} files)"
+
+    display = (
+        f"#Task: {task_name}\n"
+        f"➜ {bar} » {percentage_str}\n"
+        f"➜ Status : {status_str}\n"
+        f"➜ Done   : {done_str} of {total_str}\n"
+        f"➜ Speed  : {speed_str}\n"
+        f"➜ ETA    : {eta_str}\n"
+        f"➜ Past   : {elapsed_str}\n"
+        f"➜ User   : {user_name}"
+    )
+    return display.strip()
+
+
+async def update_progress(
+    status_msg,
+    url,
+    file_index,
+    total_files,
+    user_name,
+    start_time,
+    downloaded_bytes,
+    total_bytes,
+    speed_str="N/A",
+    eta_str="N/A",
+    dl_type="unknown",
+):
+    """Standardised progress reporting for the specialised downloaders."""
+    if not status_msg:
+        return
+    percentage = downloaded_bytes / total_bytes * 100 if total_bytes > 0 else 0
+    progress_data = {
+        "type": dl_type,
+        "percentage": percentage,
+        "downloaded_bytes": downloaded_bytes,
+        "total_size_str": naturalsize(total_bytes),
+        "speed": speed_str,
+        "eta": eta_str,
+    }
+    display = build_custom_progress_display(
+        url, progress_data, file_index, total_files, user_name, start_time
+    )
+
+    now = time.time()
+    if now - getattr(update_progress, "last_update", 0) < 2:
+        return
+    update_progress.last_update = now
+
+    # Imported lazily to avoid a hard dependency loop at import time.
+    from pyrogram.errors import FloodWait, MessageNotModified
+
+    try:
+        await status_msg.edit_text(display)
+    except (MessageNotModified, FloodWait):
+        pass
+
+
+_TWITTER_SAFE = re.compile(r"\W")
+
+
+def format_caption(template, filename, file_size, current: int = 1, total: int = 1) -> str:
+    """Fill placeholders {filename}/{size}/{index}/{total} (max 1024 chars)."""
+    if not template:
+        caption = f"📄 {filename}\n💾 {naturalsize(file_size)}"
+        if total > 1:
+            caption = f"[{current}/{total}] " + caption
+        return caption[:1024]
+    caption = template
+    caption = caption.replace("{filename}", filename)
+    caption = caption.replace("{size}", naturalsize(file_size))
+    caption = caption.replace("{index}", str(current))
+    caption = caption.replace("{total}", str(total))
+    return caption[:1024]
+
+
+def baddiehub_caption(title: str):
+    """Turn a scraped page title into a single hashtag caption."""
+    if not title:
+        return None
+    clean_title = _TWITTER_SAFE.sub("", title)
+    return f"#{clean_title}" if clean_title else None
+
+
+# --------------------------------------------------------------------------- #
+# Thumbnails
+# --------------------------------------------------------------------------- #
+def _thumbnail_from_ffmpeg(video_path: Path):
+    """Fallback thumbnail generator using ffprobe / ffmpeg (no moviepy)."""
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_streams",
+                "-show_format",
+                str(video_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        info = json.loads(probe.stdout.decode("utf-8", "ignore"))
+        duration = int(float(info.get("format", {}).get("duration", 0)))
+        width = height = 0
+        for stream in info.get("streams", []):
+            if stream.get("codec_type") == "video":
+                width = int(stream.get("width", 0))
+                height = int(stream.get("height", 0))
+                break
+        thumb_path = video_path.with_name(f"{video_path.stem}_thumb.jpg")
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                str(max(duration // 2, 0)),
+                "-i",
+                str(video_path),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=320:-1",
+                str(thumb_path),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if thumb_path.exists():
+            return str(thumb_path), duration, width, height
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"ffmpeg thumbnail fallback error: {exc}")
+    return None, 0, 0, 0
+
+
+def generate_thumbnail(video_path):
+    """Generate a thumbnail and extract video metadata.
+
+    Returns: (thumb_path, duration, width, height)
+    """
+    try:
+        try:  # moviepy < 2
+            from moviepy.editor import VideoFileClip
+        except ImportError:  # moviepy >= 2
+            from moviepy import VideoFileClip
+        from PIL import Image
+
+        video_path_p = Path(video_path)
+        clip = VideoFileClip(str(video_path))
+        duration = int(clip.duration)
+        width, height = clip.size
+        frame = clip.get_frame(clip.duration / 2)
+        thumb_path = str(video_path_p.with_name(f"{video_path_p.stem}_thumb.jpg"))
+        Image.fromarray(frame).save(thumb_path)
+        clip.close()
+
+        if Path(thumb_path).stat().st_size > 200 * 1024:
+            img = Image.open(thumb_path)
+            img.save(thumb_path, quality=70, optimize=True)
+        return thumb_path, duration, width, height
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"Thumbnail/Metadata generation error: {exc}")
+        return _thumbnail_from_ffmpeg(Path(video_path))
+
+
+# --------------------------------------------------------------------------- #
+# Trackers (for the libtorrent downloader)
+# --------------------------------------------------------------------------- #
+def load_trackers():
+    """Download and cache the public tracker lists used for magnet links."""
+    trackers = []
+    try:
+        Paths.ARIA2_DIR.mkdir(parents=True, exist_ok=True)
+        for fname, url in TRACKER_FILES:
+            fpath = Paths.ARIA2_DIR / fname
+            if not fpath.exists():
+                try:
+                    response = requests.get(url, timeout=5, verify=certifi.where())
+                    response.raise_for_status()
+                    fpath.write_text(response.text, encoding="utf-8")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Failed to fetch tracker list {url}: {exc}")
+            if fpath.exists():
+                try:
+                    trackers.extend(
+                        line.strip()
+                        for line in fpath.read_text(encoding="utf-8").splitlines()
+                        if line.strip()
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Failed to read tracker file {fpath}: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"Failed to load trackers: {exc}")
+
+    Trackers.items = sorted(set(trackers)) or list(DEFAULT_TRACKERS)
+    if not trackers:
+        logger.warning("Tracker list is empty, using defaults.")
+    else:
+        logger.info(f"Loaded {len(Trackers.items)} trackers for libtorrent.")
+    return Trackers.items
+
+
+# --------------------------------------------------------------------------- #
+# Website scraping (BaddieHub)
+# --------------------------------------------------------------------------- #
+def get_website_html(url: str) -> str:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    return requests.get(url, headers=headers, verify=certifi.where(), timeout=30).text
+
+
+def extract_urls(html: str, base_url: str):
+    pattern = r"""(?<=href=["'])(?:https?:\/\/(?:www\.)?[^"']+\.[^"'\/]+)?\/[^"']*"""
+    urls = re.findall(pattern, html)
+    parsed_base = urlparse(base_url)
+    internal = []
+    for url in urls:
+        parsed = urlparse(url)
+        if not parsed.netloc:
+            internal.append(f"{parsed_base.scheme}://{parsed_base.netloc}{url}")
+        elif parsed.netloc == parsed_base.netloc:
+            internal.append(url)
+    return internal
+
+
+def extract_media_urls(html: str):
+    return re.findall(r"""https?://[^"'\s]+\.(?:mp4|hls|webm|mp3|m3u8)""", html)

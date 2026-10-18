@@ -1,0 +1,38 @@
+# ---- Telegram client (faster-pyrogram is the maintained Pyrogram fork) ----
+git+https://github.com/cavallium/faster-pyrogram.git
+tgcrypto
+
+# ---- Generic download engines ----
+gallery-dl
+cyberdrop-dl-patched
+yt-dlp
+requests
+aiohttp
+certifi
+beautifulsoup4
+aiolimiter
+
+# ---- Google Drive ----
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+
+# ---- Torrents / cloud ----
+libtorrent
+
+# ---- Media processing / upload ----
+moviepy
+Pillow
+cryptography
+
+# ---- Helpers ----
+humanize
+tqdm
+nest_asyncio
+pyte
+psutil
+
+# NOTE: `megatools` is a system package, not a pip package.
+#       Install it with:  apt-get install -y megatools   (Debian/Ubuntu)
+#                         brew install megatools         (macOS)
+#       `ffmpeg`/`ffprobe` are also required and installed the same way.
